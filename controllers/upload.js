@@ -14,43 +14,37 @@ const parseFile = (filePath) => {
   return xlsx.utils.sheet_to_json(sheet);
 };
 
+// ── Enrich a single row via Melissa ContactVerify ────────────────────────────
 const enrichRecord = async (row) => {
+  console.log("ENRICHRECORD")
   const params = {
-    format: 'JSON',
+    format: 'json',
     id: MELISSA_ID,
-    t: row.Email, // email as the search term
+    act: 'Append,Check,Verify,Move',
+    cols: 'AddressLine1,City,State,PostalCode,EmailAddress,TopLevelDomain,PhoneNumber,NameFirst,NameLast,CompanyName',
+    first: row.FirstName || '',
+    last:  row.LastName  || '',
+    full:  `${row.FirstName || ''} ${row.LastName || ''}`.trim(),
+    a1:    row.Address    || '',
+    city:  row.City       || '',
+    state: row.State      || '',
+    email: row.Email      || '',
+    phone: row.Cell       || '',
   };
 
   const response = await axios.get(
-    'https://personatorsearch.melissadata.net/WEB/doPersonatorSearch',
+    'https://personator.melissadata.net/v3/WEB/ContactVerify/doContactVerify',
     { params }
   );
 
   console.log('Melissa response:', JSON.stringify(response.data, null, 2));
+
+  // ContactVerify returns Records array just like PersonatorSearch
   return response.data?.Records?.[0] || null;
 };
 
 
-// ── Call Melissa API for one row ─────────────────────────────────────────────
-// const enrichRecord = async (row) => {
-//   const params = {
-//     format: 'JSON',
-//     id: MELISSA_ID,
-//     act: 'Append',
-//     opt: 'Append:blank',
-//     email: row.Email,
-//   };
 
-//   const response = await axios.get(
-//     'https://personator.melissadata.net/v3/WEB/ContactVerify/doContactVerify',
-//     { params }
-//   );
-
-//   console.log('Melissa response:', JSON.stringify(response.data, null, 2));
-//   return response.data?.Records?.[0] || null;
-// };
-
-// ── Upload & Enrich ──────────────────────────────────────────────────────────
 module.exports.uploadAndEnrich = async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
@@ -61,10 +55,7 @@ module.exports.uploadAndEnrich = async (req, res) => {
   let userId = null;
   try {
     const token = req.headers.authorization?.split(' ')[1];
-    console.log(token)
     const decoded = jwt.verify(token, process.env.JWT_KEY);
-    console.log(decoded)
-    console.log('decoded')
     userId = decoded._id;
   } catch (e) {
     return res.status(401).json({ error: 'Unauthorized' });
@@ -77,30 +68,23 @@ module.exports.uploadAndEnrich = async (req, res) => {
       return res.status(400).json({ error: 'File is empty or could not be parsed' });
     }
 
-    if (!rows[0].hasOwnProperty('Email')) {
-      return res.status(400).json({ error: 'File must contain an "Email" column' });
-    }
-
     let enrichedCount = 0;
     const enrichedRows = [];
 
     for (const row of rows) {
       try {
-        if (!row.Email) {
-          enrichedRows.push({ ...row, MelissaResults: 'SKIPPED - No Email' });
-          continue;
-        }
+      
 
         const melissaResult = await enrichRecord(row);
         const resultCodes = melissaResult?.Results || '';
-        
+
         const emailAddress = melissaResult?.EmailAddress?.trim();
         const resultCodesTrimmed = resultCodes.trim();
         const hasError = resultCodesTrimmed.split(',').every(code => code.trim().startsWith('E'));
-        
+
         // Only count as enriched if Melissa returned a real EmailAddress
         const isEnriched = resultCodesTrimmed.length > 0 && !hasError && !!emailAddress;
-        
+
         if (isEnriched) enrichedCount++;
 
         enrichedRows.push({
@@ -114,15 +98,15 @@ module.exports.uploadAndEnrich = async (req, res) => {
           Email:              row.Email      || '',
           Cell:               row.Cell       || '',
           // Melissa appended fields
-          AppendedFirstName:  melissaResult?.FirstName    || '',
-          AppendedLastName:   melissaResult?.LastName     || '',
+          AppendedFirstName:  melissaResult?.NameFirst    || '',
+          AppendedLastName:   melissaResult?.NameLast     || '',
           AppendedAddress:    melissaResult?.AddressLine1 || '',
           AppendedCity:       melissaResult?.City         || '',
           AppendedState:      melissaResult?.State        || '',
           AppendedPostalCode: melissaResult?.PostalCode   || '',
           AppendedPhone:      melissaResult?.PhoneNumber  || '',
           AppendedCompany:    melissaResult?.CompanyName  || '',
-          Domain:             melissaResult?.Domain       || '',
+          Domain:             melissaResult?.TopLevelDomain || '',
           MelissaResults:     resultCodes,
         });
 
@@ -170,7 +154,7 @@ module.exports.uploadAndEnrich = async (req, res) => {
     let clientSecret = null;
     if (enrichedCount > 0) {
       const paymentIntent = await stripe.paymentIntents.create({
-        amount:   Math.round(enrichedCount * 100), // $1 per record in cents
+        amount:   Math.round(enrichedCount * 100),
         currency: 'usd',
         metadata: { cloudinaryUrl },
       });
@@ -180,8 +164,8 @@ module.exports.uploadAndEnrich = async (req, res) => {
     return res.status(200).json({
       totalRecords:    rows.length,
       enrichedRecords: enrichedCount,
-      downloadUrl:     cloudinaryUrl, // direct Cloudinary URL
-      clientSecret,                   // for Stripe payment confirmation
+      downloadUrl:     cloudinaryUrl,
+      clientSecret,
     });
 
   } catch (err) {
@@ -214,21 +198,22 @@ module.exports.createPaymentIntent = async (req, res) => {
 
 // ── Pay & get download URL ───────────────────────────────────────────────────
 module.exports.payAndDownload = async (req, res) => {
-    const { downloadUrl, paymentIntentId } = req.body;
-  console.log("HERE")
-    // Verify token
-    try {
-      const token = req.headers.authorization?.split(' ')[1];
-      jwt.verify(token, process.env.JWT_KEY);
-    } catch (e) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-  
-    if (!downloadUrl) return res.status(400).json({ error: 'Missing downloadUrl' });
-  
-    return res.status(200).json({ downloadUrl });
-  };
-// ── Serve local file (fallback, not used with Cloudinary) ───────────────────
+  const { downloadUrl, paymentIntentId } = req.body;
+  console.log("HERE");
+
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    jwt.verify(token, process.env.JWT_KEY);
+  } catch (e) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  if (!downloadUrl) return res.status(400).json({ error: 'Missing downloadUrl' });
+
+  return res.status(200).json({ downloadUrl });
+};
+
+// ── Serve local file (fallback) ──────────────────────────────────────────────
 module.exports.downloadFile = (req, res) => {
   const { filename } = req.params;
   const filePath = `uploads/${filename}`;
@@ -242,24 +227,22 @@ module.exports.downloadFile = (req, res) => {
   });
 };
 
-
-
+// ── Get user's file history ──────────────────────────────────────────────────
 module.exports.getUserFiles = async (req, res) => {
-    try {
-      const token = req.headers.authorization?.split(' ')[1];
-      if (!token) return res.status(401).json({ error: 'No token provided' });
-  
-      const decoded = jwt.verify(token, process.env.JWT_KEY);
-      const userId = decoded._id || decoded.id;
-  
-      if (!userId) return res.status(401).json({ error: 'Invalid token' });
-  
-      const files = await EnrichedFile.find({ user: userId })
-        .sort({ createdAt: -1 }); // newest first
-  
-      return res.status(200).json({ files });
-    } catch (e) {
-      console.error('getUserFiles error:', e.message);
-      return res.status(500).json({ error: 'Failed to fetch files' });
-    }
-  };
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) return res.status(401).json({ error: 'No token provided' });
+
+    const decoded = jwt.verify(token, process.env.JWT_KEY);
+    const userId = decoded._id || decoded.id;
+
+    if (!userId) return res.status(401).json({ error: 'Invalid token' });
+
+    const files = await EnrichedFile.find({ user: userId }).sort({ createdAt: -1 });
+
+    return res.status(200).json({ files });
+  } catch (e) {
+    console.error('getUserFiles error:', e.message);
+    return res.status(500).json({ error: 'Failed to fetch files' });
+  }
+};

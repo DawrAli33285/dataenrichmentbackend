@@ -1,6 +1,6 @@
 const mongoose=require('mongoose')
 
-const connect=mongoose.connect(`mongodb://127.0.0.1/melisanew`)
+const connect=mongoose.connect(`mongodb+srv://dawar:dawar@cluster0.svmizih.mongodb.net`)
 
 
 module.exports=connect;
