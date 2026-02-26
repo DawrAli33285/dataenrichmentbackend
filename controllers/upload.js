@@ -126,7 +126,7 @@ module.exports.uploadAndEnrich = async (req, res) => {
     const outputWorkbook = xlsx.utils.book_new();
     const outputSheet = xlsx.utils.json_to_sheet(enrichedRows);
     xlsx.utils.book_append_sheet(outputWorkbook, outputSheet, 'Enriched');
-    const outputPath = `uploads/enriched_${Date.now()}.xlsx`;
+    const outputPath = `/tmp/enriched_${Date.now()}.xlsx`;
     xlsx.writeFile(outputWorkbook, outputPath);
 
     // Upload to Cloudinary

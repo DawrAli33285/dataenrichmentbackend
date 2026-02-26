@@ -1,7 +1,7 @@
 const express    = require('express');
 const router     = express.Router();
 const multer     = require('multer');
-const upload     = multer({ storage: multer.memoryStorage() });
+const upload = multer({ dest: '/tmp/' });  // ✅ was 'uploads/'
 
 const { uploadAndEnrich, payAndDownload, getUserFiles, createPaymentIntent, downloadFile } = require('../controllers/upload');
 
